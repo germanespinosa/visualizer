@@ -5,28 +5,31 @@ import numpy
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
+results_folder = "/home/german/simulation/results"
+
 def get_trajectory(ts):
     t = []
-    ta = ts.split('/')
-    for cs in ta:
-        x = int(cs.split(";")[0])
-        y = int(cs.split(";")[1])
+    for cs in ts:
+        x = cs["x"]
+        y = cs["y"]
         t.append((x + 7, y + 7))
     return t
 
 def get_starting_positions(r):
     sps = set()
-    for k in r["rows"]:
-        x = int(k["starting_position"].split(";")[0].replace("(",""))
-        y = int(k["starting_position"].split(";")[1].replace(")",""))
+    for k in r["episodes"]:
+        x = k["predator_start_location"]["x"]
+        y = k["predator_start_location"]["y"]
         sps.add((x,y))
     return sps
 
+
 if len(sys.argv) >= 2:
-    if os.path.exists(str(sys.argv[1])):
-        print('Source folder:', sys.argv[1])
+    source_folder = results_folder + "/" + str(sys.argv[1])
+    if os.path.exists(source_folder):
+        print('Source folder:', source_folder)
     else:
-        print('Source folder: ', sys.argv[1], "doesn't exists")
+        print('Source folder: ', source_folder, "doesn't exists")
         exit(1)
 else:
     print('No source folder specified.')
@@ -45,7 +48,6 @@ for s in range(len(survival_rates_l["rows"])):
     for e in range(10):
         survival_rates[str(s) + "_" + str(e)] = float(survival_rates_l["rows"][s][str(e)])
 
-source_folder = str(sys.argv[1])
 results = {}
 occlussions = {}
 i = 1
@@ -54,21 +56,20 @@ for r, d, f in os.walk(source_folder):
     for file in f:
         if '.log' in file:
             candidate = file
-            if "OcclusionCoordinates" in candidate:
+            if "world" in candidate:
                 prefix = candidate.split("_")[0]
-                if prefix == "OcclusionCoordinates":
+                if prefix == "world":
                     prefix = ""
                 else:
                     prefix += "_"
-                sim=candidate.replace("OcclusionCoordinates_", "").replace(".log", "").replace(prefix, "")
-                results[sim] = log_file.load(source_folder + "/" + file)
-                starting_positions[sim] = get_starting_positions(results[sim])
-                results[sim]["prefix"] = prefix
+                sim = candidate.replace("world_", "").replace(".log", "").replace(prefix, "")
+                results[(sim, prefix)] = log_file.LoadResultsFile(source_folder + "/" + file)
+                starting_positions[(sim, prefix)] = get_starting_positions(results[(sim, prefix)])
         if '.csv' in file:
             candidate = file
-            if "OcclusionCoordinates" in candidate:
-                sim=candidate.replace("OcclusionCoordinates_", "").replace(".csv", "")
-                occlussions[sim] = log_file.load(source_folder + "/" + file)
+            if "world" in candidate:
+                sim = candidate.replace("world_", "").replace(".csv", "")
+                occlussions[sim] = log_file.LoadOcclusionsFile(source_folder + "/" + file)
 
 
 keys = list(results.keys())
@@ -85,7 +86,7 @@ yaxis=[]
 yaxisp=[]
 xaxisum=[]
 xaxisge=[]
-for k in keys:
+for k, prefix in keys:
     fig, my_plots = plt.subplots(ncols=6)
     fig.set_size_inches(40, 7)
     c = 0
@@ -98,15 +99,15 @@ for k in keys:
     tpt = numpy.zeros((15, 15))
     visited = set()
     pvisited = set()
-    for r in results[k]["rows"]:
-        trajectory = get_trajectory(r["prey_trajectory"])
-        ptrajectory = get_trajectory(r["predator_trajectory"])
+    for r in results[(k,prefix)]["episodes"]:
+        trajectory = get_trajectory(r["result"]["trajectories"][0])
+        ptrajectory = get_trajectory(r["result"]["trajectories"][1])
         for x, y in trajectory:
             tt[y, x] += 1
         for x, y in ptrajectory:
             tpt[y, x] += 1
         c += 1
-        if r["habit_result"] == "1":
+        if r["result"]["result"] == 1:
             visited.update(trajectory)
             pvisited.update(ptrajectory)
             for x, y in trajectory:
@@ -125,7 +126,7 @@ for k in keys:
     im1 = ax1.matshow(tt, cmap='OrRd')
     ax1.set_title('all')
     im2 = ax2.matshow(st, cmap='OrRd')
-    ax2.set_title('successful ' + str(round(s/c*100, 2)) + "% (" + str(round(survival_rates[k]*100,2)) + "%)")
+    ax2.set_title('successful ' + str(round(s/c*100, 2)) + "% (" + str(round(survival_rates[k]*100, 2)) + "%)")
     im3 = ax3.matshow(ft, cmap='OrRd')
     ax3.set_title('fails ' + str(round((c-s)/c*100, 2)) + "%")
 
@@ -147,12 +148,12 @@ for k in keys:
             tick.set_visible(False)
         for o in occlussions[k]["rows"]:
             ax.add_patch(Rectangle((int(o["X"])-.5, 14-int(o["Y"])-.5), width=.95, height=.95, fill=True, color='black', lw=1))
-        for x, y in starting_positions[k]:
+        for x, y in starting_positions[(k,prefix)]:
             ax.add_patch(Rectangle((x-.5, 14-y-.5), width=.95, height=.95, fill = False, edgecolor='green', lw=3))
 
     path_spread = round(len(visited) / (map_size - len(occlussions[k])), 2)
     fig.suptitle('Map'+ k + " path spread: " + str(path_spread) + " (" + str(path_spreads[k]) + ")", fontsize=16)
-    plt.savefig(source_folder + "/" + results[k]["prefix"] + k, bbox_inches='tight')
+    plt.savefig(source_folder + "/world_" + k, bbox_inches='tight')
     #plt.show()
     plt.close(fig)
     improvement = s/c - survival_rates[k]
@@ -160,11 +161,11 @@ for k in keys:
     yaxisp.append(improvement/survival_rates[k]*100)
     xaxisum.append(path_spreads[k])
     xaxisge.append(path_spread)
-    ims += improvement
-    print(k, " success rate:", s/c, " against", survival_rates[k], " improvement ", round(improvement,4) ," path spread:", path_spread, " against", path_spreads[k])
+    ims += (improvement/survival_rates[k])*100
+    print(k, starting_positions[(k, prefix)], " success rate:", s/c, " against", survival_rates[k], " improvement ", str(round(improvement/survival_rates[k]*100,2))+"% path spread:", path_spread, " against", path_spreads[k])
     row_count += 1
 
-print("average improvement: ", ims/ row_count)
+print("average improvement: ", str(round(ims/ row_count,2))+"%")
 
 fig, (um, ge) = plt.subplots(ncols=2)
 fig.set_size_inches(10, 4)
