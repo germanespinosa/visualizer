@@ -35,14 +35,14 @@ else:
     print('No source folder specified.')
     exit(1)
 
-path_spreads_l = log_file.load("path_spread_UM.csv")
+path_spreads_l = log_file.LoadOcclusionsFile("path_spread_UM.csv")
 path_spreads = {}
 for s in range(len(path_spreads_l["rows"])):
     for e in range(10):
         path_spreads[str(s) + "_" + str(e)] = float(path_spreads_l["rows"][s][str(e)])
 
 
-survival_rates_l = log_file.load("survival_rates_UM.csv")
+survival_rates_l = log_file.LoadOcclusionsFile("survival_rates_UM.csv")
 survival_rates = {}
 for s in range(len(survival_rates_l["rows"])):
     for e in range(10):
@@ -158,11 +158,20 @@ for k, prefix in keys:
     plt.close(fig)
     improvement = s/c - survival_rates[k]
     yaxis.append(improvement)
-    yaxisp.append(improvement/survival_rates[k]*100)
+    if (survival_rates[k]>0):
+        improvementp = improvement/survival_rates[k]*100
+        ims += (improvement / survival_rates[k]) * 100
+    else:
+        if (improvement>0):
+            improvementp = 100
+            ims += 100
+        else:
+            improvementp = 0
+            ims += 0
+    yaxisp.append(improvementp)
     xaxisum.append(path_spreads[k])
     xaxisge.append(path_spread)
-    ims += (improvement/survival_rates[k])*100
-    print(k, starting_positions[(k, prefix)], " success rate:", s/c, " against", survival_rates[k], " improvement ", str(round(improvement/survival_rates[k]*100,2))+"% path spread:", path_spread, " against", path_spreads[k])
+    print(k, starting_positions[(k, prefix)], " success rate:", s/c, " against", survival_rates[k], " improvement ", str(round(improvementp,2))+"% path spread:", path_spread, " against", path_spreads[k])
     row_count += 1
 
 print("average improvement: ", str(round(ims/ row_count,2))+"%")

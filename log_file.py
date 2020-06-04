@@ -4,28 +4,17 @@ import json
 results_folder = "/home/german/simulation/results"
 
 def LoadOcclusionsFile(file):
-    column_names = []
-    rows = []
-    with open(file) as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        line_count = 0
-        for row in csv_reader:
-            if line_count == 0:
-                for cn in row:
-                    column_names.append(cn.replace(" ", ""))
-                line_count += 1
-            else:
-                ci = 0
-                nr = {}
-                for c in row:
-                    nr[column_names[ci]] = c
-                    ci += 1
-                if (ci == len(column_names)):
-                    rows.append(nr)
-                else:
-                    print("error on file", file, "line", line_count)
-                line_count += 1
-    return {"column_names": column_names, "rows": rows}
+    occlusions = []
+    with open(file, "r") as file:
+        line = file.readline()
+        # skip the headers
+        line = file.readline()
+        while line:
+            x = int(line.split(",")[0])
+            y = int(line.split(",")[1])
+            occlusions += [(x, y)]
+            line = file.readline()
+    return occlusions
 
 def LoadResultsFile(file):
     with open(file) as f:
@@ -37,11 +26,30 @@ def ProcessResults(results):
     summary = {}
     successes = 0
     length = 0
+    success_length = 0
+    fail_length = 0
+
     for e in results["episodes"]:
         successes += e["result"]["result"]
+        if e["result"]["result"] == 1:
+            success_length += e["result"]["lenght"]
+        else:
+            fail_length += e["result"]["lenght"]
         length += e["result"]["lenght"]
+
+    fails = len(results["episodes"]) - successes
     summary["survival_rate"] = successes / len(results["episodes"])
     summary["avg_length"] = length / len(results["episodes"])
+
+    if successes > 0:
+        summary["avg_success_length"] = success_length / successes
+    else:
+        summary["avg_success_length"] = 0
+    if fails > 0:
+        summary["avg_fail_length"] = fail_length / fails
+    else:
+        summary["avg_fail_length"] = 0
+
     return summary
 
 def ProcessEntropy(entropy):
@@ -75,11 +83,11 @@ def LoadExperiment(experiment_name):
         while line:
             simulation = int(line.split(" ")[0])
             entropy = int(line.split(" ")[1])
-            spawn_locations = line.split('"')[1].replace('"', "").split(" ")
+            spawn_locations = line.split('"')[1].replace("(", "").replace(")", "").replace("'", "").replace('"', "").split(" ")
             if entropy not in experiment["worlds"].keys():
                 experiment["worlds"][entropy] = {}
             experiment["worlds"][entropy][simulation] = {}
-            experiment["worlds"][entropy][simulation]["spawn_locations"] = spawn_locations
+            experiment["worlds"][entropy][simulation]["spawn_locations"] = [(int(sl.split(";")[0]), int(sl.split(";")[1])) for sl in spawn_locations]
             occlusions = LoadOcclusionsFile(folder + "/world_" + str(simulation) + "_" + str(entropy) + ".csv")
             experiment["worlds"][entropy][simulation]["occlusions"] = occlusions
             results = LoadResultsFile(folder + "/world_" + str(simulation) + "_" + str(entropy) + ".log")
