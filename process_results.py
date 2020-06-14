@@ -2,26 +2,13 @@ import json
 import sys
 import os
 import numpy
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 
+default_winner = 1
 results_folder = "/home/german/simulation/results"
 
-
-def init_fig():
-    fig, ax = plt.subplots()
-    fig.set_size_inches(2, 2)
-    return fig, ax
-
-
-def close_fig(fig):
-    plt.close(fig)
-
-
-def generate_heat_map_img(file_prefix, dataset, occlusions):
+def generate_heat_map_img(file_prefix, dataset, occlusions, stats):
     heat_map_data = dataset["heat_map"]
     spawn_locations = heat_map_data["spawn_locations"]
-
     spawn_locations_lists = []
     for agent_spawn_locations_ind in range(len(spawn_locations)):
         positions = spawn_locations[agent_spawn_locations_ind]
@@ -36,17 +23,26 @@ def generate_heat_map_img(file_prefix, dataset, occlusions):
         x, y = to_map_coordinates(position, heat_map_data["coordinates"])
         occlusions_list.append([x, y])
 
+    path_diversities = []
     for agent_ind in range(len(heat_map_data["data"])):
         agent_data = heat_map_data["data"][agent_ind]
         for result_ind in range(len(agent_data)):
             data = agent_data[result_ind]
+            if agent_ind==0:
+                path_diversities += [data.copy()]
+            else:
+                path_diversities[result_ind] += data
+            path_diversity = float(numpy.count_nonzero(data)) / float(data.size-len(occlusions))
+            stats[result_ind]["path_diversity"][agent_ind] = path_diversity
             file_name = dataset["name"] + "_" + str(result_ind) + "_" + str(agent_ind)
             heat_map_info = {"cells": data.tolist(),
                              "occlusions": occlusions_list,
                              "coordinates": heat_map_data["coordinates"],
                              "spawn_locations": spawn_locations_lists}
             save_json(heat_map_info, file_prefix + file_name + ".json")
-
+    for result_ind in range(len(path_diversities)):
+        path_diversity = float(numpy.count_nonzero(path_diversities[result_ind])) / float(path_diversities[result_ind].size - len(occlusions))
+        stats[result_ind]["path_diversity"][-1] = path_diversity
 
 def create_heat_map_data(agent_count, possible_results_count, map_coordinates):
     dimensions = (map_coordinates[1][0] - map_coordinates[0][0] + 1, map_coordinates[1][1] - map_coordinates[0][1] + 1)
@@ -57,7 +53,7 @@ def create_heat_map_data(agent_count, possible_results_count, map_coordinates):
             data += [numpy.zeros(dimensions, dtype=int)]
         data += [numpy.zeros(dimensions, dtype=int)]
         values["data"] += [data]
-        values["spawn_locations"] += [set()]
+        values["spawn_locations"] += [[]]
     return values
 
 
@@ -65,7 +61,10 @@ def accumulate_heat_map_data(destination, source):
     for agent_ind in range(len(destination["data"])):
         for result_ind in range(len(destination["data"][agent_ind])):
             destination["data"][agent_ind][result_ind] += source["data"][agent_ind][result_ind]
-        destination["spawn_locations"][agent_ind].update(source["spawn_locations"][agent_ind])
+        sl = set()
+        sl.update(destination["spawn_locations"][agent_ind])
+        sl.update(source["spawn_locations"][agent_ind])
+        destination["spawn_locations"][agent_ind] = list(sl)
 
 def to_map_coordinates(position, world_coordinates):
     return position[0]-world_coordinates[0][0], (position[1])-world_coordinates[0][1]
@@ -92,7 +91,7 @@ def add_trajectories(data, trajectories, winner):
             data["distance"][trajectory_ind] += abs(x-px) + abs(y-py)
             px, py = x, y
             if first:
-                heat_map_data["spawn_locations"][trajectory_ind].add(tuple(position))
+                heat_map_data["spawn_locations"][trajectory_ind] += [tuple(position)]
                 first = False
             trajectory_data[-1][y, x] += 1
             trajectory_data[winner][y, x] += 1
@@ -100,7 +99,7 @@ def add_trajectories(data, trajectories, winner):
         cells_visited = len(unique)
         data["length"][trajectory_ind] = len(trajectories[trajectory_ind])
         data["cell_revisit"][trajectory_ind] = len(trajectories[trajectory_ind]) - cells_visited
-        data["path_diversity"][trajectory_ind] = cells_visited / size
+        data["path_diversity"][trajectory_ind] = 0
     return data
 
 
@@ -111,6 +110,7 @@ def create_data_point(agent_count):
 def create_stats(agent_count):
     return [{
                 "count": 0,
+                "percent": 0.0,
                 "length": [0] * (agent_count+1),
                 "distance": [0] * (agent_count+1),
                 "path_diversity": [0] * (agent_count+1),
@@ -130,7 +130,7 @@ def save_json(value, filename):
 
 
 def weighted_avg(count, value, data_point):
-    return (count * value + data_point) / (count + 1)
+    return (float(count) * float(value) + float(data_point)) / (float(count) + 1.0)
 
 
 def update_stats(info, data):
@@ -142,7 +142,7 @@ def update_stats(info, data):
     all_stats = stats[-1]
 
     for k in winner_stats.keys():
-        if k != "count":
+        if k != "count" and k != "percent":
             if type(data[k]) is list:
                 for agent_ind in range(agent_count):
                     winner_stats[k][agent_ind] = weighted_avg(winner_stats["count"],
@@ -168,64 +168,88 @@ def update_stats(info, data):
 
     winner_stats["count"] += 1
     all_stats["count"] += 1
+    for i in range(len(stats)-1):
+        stats[i]["percent"] = float(stats[i]["count"]) * 100.0 / float(all_stats["count"])
+    all_stats["percent"] = 100
 
+
+def find_winner(values):
+    lv = [v[-1] for v in values]
+    episode_winner = default_winner
+    for w in range(len(lv)):
+        if lv[w] == 100:
+            episode_winner = w
+    return episode_winner
+
+def find_item_by_name(l,name):
+    for i in l:
+        if i["name"] == name:
+            return True
+    return False
+
+def get_item_by_name(l, name):
+    for i in l:
+        if i["name"] == name:
+            return i
+    return False
 
 experiment_path = sys.argv[1]
 experiment_name = experiment_path.split('/')[-1]
 agents_names = ["prey", "predator"]
 colors_set = ["Reds", "Blues"]
-experiment_stats = { "name": experiment_name, "stats": create_stats(len(agents_names)), "groups": {}}
+experiment_stats = {"name": experiment_name, "stats": create_stats(len(agents_names)), "groups": []}
 settings = load_json(experiment_path + "/settings.json")
+experiment_data = load_json(experiment_path + "/experiment.json")
 map_dimensions = (15, 15)
 
-groups = {}
+groups = []
+groups_names = []
 for setting in settings:
-    if setting["group"] not in groups.keys():
-        groups[setting["group"]] = {"name": setting["group"],
-                                    "worlds": {}}
-        experiment_stats["groups"][setting["group"]] = {"name": setting["group"],
-                                                        "stats": create_stats(len(agents_names)),
-                                                        "worlds": {}}
-    group = groups[setting["group"]]
-    group_stats = experiment_stats["groups"][setting["group"]]
 
-    if setting["world"] not in group["worlds"].keys():
+    if not find_item_by_name(groups, setting["group"]):
+        groups_names += [setting["group"]]
+        groups += [{"name": setting["group"],
+                    "worlds": []}]
+        experiment_stats["groups"] += [{"name": setting["group"],
+                                        "stats": create_stats(len(agents_names)),
+                                        "worlds": []}]
+    group = get_item_by_name(groups, setting["group"])
+    group_stats = get_item_by_name(experiment_stats["groups"], setting["group"])
+
+    if not find_item_by_name(group["worlds"], setting["world"]):
         world_info = load_json(experiment_path + "/" + setting["group"] + "/" +
                                setting["world"] + "/world.json")
-        group["worlds"][setting["world"]] = {"name": setting["world"],
-                                             "heat_map": create_heat_map_data(2,
-                                                                              2,
-                                                                              world_info["coordinates"]),
-                                             "sets": {},
-                                             "complexity": world_info["complexity"]}
-        group["worlds"][setting["world"]].update(world_info)
-        group_stats["worlds"][setting["world"]] = {"name": setting["world"],
-                                                   "stats": create_stats(len(agents_names)),
-                                                   "sets": {}}
+        world_info.update({"name": setting["world"],
+                           "heat_map": create_heat_map_data(2, 2, world_info["coordinates"]),
+                           "sets": [],
+                           "complexity": world_info["complexity"]})
+        group["worlds"] += [world_info]
+        group_stats["worlds"] += [{"name": setting["world"],
+                                   "stats": create_stats(len(agents_names)),
+                                   "sets": []}]
 
-    world = group["worlds"][setting["world"]]
-    world_stats = group_stats["worlds"][setting["world"]]
+    world = get_item_by_name(group["worlds"], setting["world"])
+    world_stats = get_item_by_name(group_stats["worlds"], setting["world"])
 
-    if setting["world"] not in world["sets"].keys():
-        world["sets"][setting["set"]] = {"name": setting["set"],
-                                         "stats": create_stats(len(agents_names)),
-                                         "heat_map": create_heat_map_data(2,
-                                                                          2,
-                                                                          world["coordinates"]),
-                                         "episodes": [],
-                                         "complexity": world["complexity"]}
-        world_stats["sets"][setting["set"]] = {"name": setting["world"],
-                                               "stats": create_stats(len(agents_names)),
-                                               "episodes": []}
+    if not find_item_by_name(world["sets"], setting["set"]):
+        world["sets"] += [{"name": setting["set"],
+                           "stats": create_stats(len(agents_names)),
+                           "heat_map": create_heat_map_data(2, 2, world["coordinates"]),
+                           "episodes": [],
+                           "complexity": world["complexity"]}]
+        world_stats["sets"] += [{"name": setting["set"],
+                                 "stats": create_stats(len(agents_names)),
+                                 "episodes": []}]
 
-    set_ = world["sets"][setting["set"]]
-    set_stats = world_stats["sets"][setting["set"]]
+    set_ = get_item_by_name(world["sets"], setting["set"])
+    set_stats = get_item_by_name(world_stats["sets"], setting["set"])
 
     episodes = load_json(experiment_path + "/" + setting["group"] + "/" +
                          setting["world"] + "/" + setting["set"] + "/episodes.json")
 
     for episode in episodes:
-        episode_data = add_trajectories(set_, episode["trajectories"], episode["winner"])
+        winner = find_winner(episode["values"])
+        episode_data = add_trajectories(set_, episode["trajectories"], winner)
         set_stats["episodes"].append(episode_data)
         update_stats(set_stats, episode_data)
         update_stats(world_stats, episode_data)
@@ -233,41 +257,55 @@ for setting in settings:
         update_stats(experiment_stats, episode_data)
 
 
-img_path = experiment_path + "/img"
+img_path = experiment_path + "/heatmaps"
 
-save_json(list(groups.keys()), experiment_path + "/results.json")
+save_json(groups_names, experiment_path + "/results.json")
+
+if not os.path.isdir(img_path):
+    os.mkdir(img_path)
+
+for group in groups:
+    group_name = group["name"]
+    group_stats = get_item_by_name(experiment_stats["groups"],group_name)
+    if not os.path.isdir(img_path + "/" + group_name):
+        os.mkdir(img_path + "/" + group["name"])
+    for world in group["worlds"]:
+        world_name = world["name"]
+        world_stats = get_item_by_name(group_stats["worlds"], world_name)
+        if not os.path.isdir(img_path + "/" + group_name + "/" + world_name):
+            os.mkdir(img_path + "/" + group_name + "/" + world_name)
+        for set_ in world["sets"]:
+            set_name = set_["name"]
+            set_stats = get_item_by_name(world_stats["sets"],set_name)
+            accumulate_heat_map_data(world["heat_map"], set_["heat_map"])
+            generate_heat_map_img(img_path + "/" + group_name + "/" + world_name + "/",
+                                                   set_,
+                                                   world["occlusions"], set_stats["stats"])
+
+        generate_heat_map_img(img_path + "/" + group_name + "/",
+                                               world,
+                                               world["occlusions"], world_stats["stats"])
+        for result_ind in range(len(group_stats["stats"])):
+            for agent_ind in range(len(group_stats["stats"][result_ind]["path_diversity"])):
+                group_stats["stats"][result_ind]["path_diversity"][agent_ind] += world_stats["stats"][result_ind]["path_diversity"][agent_ind]
+    for result_ind in range(len(group_stats["stats"])):
+        for agent_ind in range(len(group_stats["stats"][result_ind]["path_diversity"])):
+            group_stats["stats"][result_ind]["path_diversity"][agent_ind] /= len(group["worlds"])
+
 
 save_json(experiment_stats, experiment_path + "/stats.json")
 
-#exit(0)
-#create heatmaps
-os.mkdir(img_path)
 
-for group_name in groups.keys():
-    group = groups[group_name]
-    print("Creating images for group:", group_name)
-    os.mkdir(img_path + "/" + group_name)
-    a = 1
-    for world_name in group["worlds"].keys():
-        world = group["worlds"][world_name]
-        print("\t ", world_name, end=" ")
-        os.mkdir(img_path + "/" + group_name + "/" + world_name)
-        # f, a = init_fig()
-        for set_name in world["sets"].keys():
-            set_ = world["sets"][set_name]
-            accumulate_heat_map_data(world["heat_map"], set_["heat_map"])
-            generate_heat_map_img(img_path + "/" + group_name + "/" + world_name + "/",
-                                  set_,
-                                  world["occlusions"])
-        print("done!")
-        generate_heat_map_img(img_path + "/" + group_name + "/",
-                              world,
-                              world["occlusions"])
-        # close_fig(f)
-    print("")
+if os.path.exists(results_folder + "/experiments.json"):
+    experiments = load_json(results_folder + "/experiments.json")
+else:
+    experiments = []
 
-# for key in groups.keys():
-#     save_json(groups[key], experiment_path + "/" + key + "/group_results.json")
-#
-# experiment_result={"stats": experiment_stats, "groups": list(groups.keys())}
-# save_json(experiment_result, experiment_path + "/experiment_results.json")
+found = False
+for experiment in experiments:
+    if experiment["experiment_name"] == experiment_name:
+        found = True
+
+if not found:
+    experiments += [experiment_data]
+    save_json(experiments, results_folder + "/experiments.json")
