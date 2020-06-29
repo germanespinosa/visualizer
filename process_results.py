@@ -2,6 +2,7 @@ import json
 import sys
 import os
 import numpy
+from scipy.stats import entropy
 
 default_winner = 1
 results_folder = "/home/german/simulation/results"
@@ -70,18 +71,37 @@ def to_map_coordinates(position, world_coordinates):
     return position[0]-world_coordinates[0][0], (position[1])-world_coordinates[0][1]
 
 
-def add_trajectories(data, trajectories, winner):
+def get_world_entropy(world):
+    map_size = get_size(world)
+    occlusion_count = len(world["occlusions"])
+    return entropy([map_size-occlusion_count, occlusion_count], base=2)
+
+def get_size(world):
+    return len(world["world"]["cells"])
+
+def add_trajectories(data, trajectories, values, winner):
     heat_map_data = data["heat_map"]
 
     agent_count = len(trajectories)
-    size = heat_map_data["dimensions"][0] * heat_map_data["dimensions"][1]
-    data = {"length": [0] * agent_count,
-            "distance": [0] * agent_count,
-            "path_diversity": [0] * agent_count,
-            "cell_revisit": [0] * agent_count,
+    data = {"length": [0.0] * agent_count,
+            "distance": [0.0] * agent_count,
+            "path_diversity": [0.0] * agent_count,
+            "cell_revisit": [0.0] * agent_count,
+            "volatility": [0.0] * agent_count,
             "complexity": data["complexity"],
+            "entropy": data["entropy"],
             "winner": winner}
     for trajectory_ind in range(agent_count):
+        if len(values[trajectory_ind]) > 0:
+            acum_change = 0.0
+            last_value = values[trajectory_ind][0]
+            for value_ind in range(1, len(values[trajectory_ind])):
+                value = values[trajectory_ind][value_ind]
+                change = abs(value-last_value)
+                acum_change += change
+                last_value = value
+            data["volatility"][trajectory_ind] = acum_change / len(values[trajectory_ind])
+
         unique = set()
         trajectory_data = heat_map_data["data"][trajectory_ind]
         first = True
@@ -111,12 +131,14 @@ def create_stats(agent_count):
     return [{
                 "count": 0,
                 "percent": 0.0,
-                "length": [0] * (agent_count+1),
-                "distance": [0] * (agent_count+1),
-                "path_diversity": [0] * (agent_count+1),
-                "cell_revisit": [0] * (agent_count+1),
-                "complexity": 0
-            } for x in range(agent_count + 1)]
+                "length": [0.0] * (agent_count+1),
+                "distance": [0.0] * (agent_count+1),
+                "path_diversity": [0.0] * (agent_count+1),
+                "cell_revisit": [0.0] * (agent_count+1),
+                "volatility": [0.0] * (agent_count+1),
+                "complexity": 0.0,
+                "entropy": 0.0
+    } for x in range(agent_count + 1)]
 
 
 def load_json(filename):
@@ -222,7 +244,9 @@ for setting in settings:
         world_info.update({"name": setting["world"],
                            "heat_map": create_heat_map_data(2, 2, world_info["coordinates"]),
                            "sets": [],
-                           "complexity": world_info["complexity"]})
+                           "complexity": world_info["complexity"],
+                           "size": get_size(world_info),
+                           "entropy": get_world_entropy(world_info)})
         group["worlds"] += [world_info]
         group_stats["worlds"] += [{"name": setting["world"],
                                    "stats": create_stats(len(agents_names)),
@@ -236,7 +260,9 @@ for setting in settings:
                            "stats": create_stats(len(agents_names)),
                            "heat_map": create_heat_map_data(2, 2, world["coordinates"]),
                            "episodes": [],
-                           "complexity": world["complexity"]}]
+                           "complexity": world["complexity"],
+                           "size": world["size"],
+                           "entropy": world["entropy"]}]
         world_stats["sets"] += [{"name": setting["set"],
                                  "stats": create_stats(len(agents_names)),
                                  "episodes": []}]
@@ -249,7 +275,7 @@ for setting in settings:
 
     for episode in episodes:
         winner = find_winner(episode["values"])
-        episode_data = add_trajectories(set_, episode["trajectories"], winner)
+        episode_data = add_trajectories(set_, episode["trajectories"], episode["values"], winner)
         set_stats["episodes"].append(episode_data)
         update_stats(set_stats, episode_data)
         update_stats(world_stats, episode_data)

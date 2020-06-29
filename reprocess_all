@@ -2,7 +2,7 @@
 
 while IFS= read -r experiment
 do
-    python process_results.py ../results/$experiment
+    python3 process_results.py ../results/$experiment
 done <<< $(json -f ../results/experiments.json -v "value['experiment_name']" -l)
 
 cd ../results

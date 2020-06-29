@@ -1,7 +1,6 @@
 import json
 import numpy as np
 import random
-import matplotlib
 
 def load_json(filename):
     with open(filename) as f:
